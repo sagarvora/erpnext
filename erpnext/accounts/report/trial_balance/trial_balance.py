@@ -146,7 +146,7 @@ def get_rootwise_opening_balances(filters, report_type):
 			"Period Closing Voucher",
 			filters={"docstatus": 1, "company": filters.company, "period_end_date": ("<", filters.from_date)},
 			fields=["period_end_date", "name"],
-			order_by="period_end_date desc",
+			order_by="period_end_date desc, creation desc",
 			limit=1,
 		)
 

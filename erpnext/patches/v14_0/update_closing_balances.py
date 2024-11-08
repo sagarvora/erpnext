@@ -19,19 +19,28 @@ def execute():
 	gle_fields = get_gle_fields()
 
 	for company in frappe.get_all("Company", pluck="name"):
-		i = 0
-		company_wise_order = {}
-		for pcv in get_period_closing_vouchers(company):
-			company_wise_order.setdefault(pcv.company, [])
-			if pcv.period_end_date not in company_wise_order[pcv.company]:
-				pcv_doc = frappe.get_doc("Period Closing Voucher", pcv.name)
-				pcv_doc.pl_accounts_reverse_gle = get_pcv_gl_entries_for_pl_accounts(pcv, gle_fields)
-				pcv_doc.closing_account_gle = get_pcv_gl_entries_for_closing_accounts(pcv, gle_fields)
-				closing_entries = pcv_doc.get_account_closing_balances()
-				make_closing_entries(closing_entries, pcv.name, pcv.company, pcv.period_end_date)
+		vouchers = get_period_closing_vouchers(company)
+		closing_entries_created = set(
+			frappe.get_all(
+				"Account Closing Balance",
+				filters={
+					"company": company,
+					"period_closing_voucher": ("in", [pcv.name for pcv in vouchers]),
+				},
+				pluck="period_closing_voucher",
+				distinct=True,
+			)
+		)
 
-				company_wise_order[pcv.company].append(pcv.period_end_date)
-				i += 1
+		for pcv in vouchers:
+			if pcv.name in closing_entries_created:
+				continue
+
+			pcv_doc = frappe.get_doc("Period Closing Voucher", pcv.name)
+			pcv_doc.pl_accounts_reverse_gle = get_pcv_gl_entries_for_pl_accounts(pcv, gle_fields)
+			pcv_doc.closing_account_gle = get_pcv_gl_entries_for_closing_accounts(pcv, gle_fields)
+			closing_entries = pcv_doc.get_account_closing_balances()
+			make_closing_entries(closing_entries, pcv.name, pcv.company, pcv.period_end_date)
 
 
 def get_gle_fields():
@@ -59,7 +68,8 @@ def get_period_closing_vouchers(company):
 		"Period Closing Voucher",
 		fields=["name", "closing_account_head", "period_start_date", "period_end_date", "company"],
 		filters={"docstatus": 1, "company": company},
-		order_by="period_end_date",
+		# can have multiple PCVs for the same period, so order by creation
+		order_by="period_end_date, creation",
 	)
 
 

@@ -444,7 +444,7 @@ def set_gl_entries_by_account(
 				"period_end_date": ("<", filters["period_start_date"]),
 			},
 			fields=["period_end_date", "name"],
-			order_by="period_end_date desc",
+			order_by="period_end_date desc, creation desc",
 			limit=1,
 		)
 		if last_period_closing_voucher:
