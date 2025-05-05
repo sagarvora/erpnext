@@ -20,7 +20,7 @@ def create_accounting_dimension_fields():
 
 def generate_name_and_calculate_amount(gl_entries, start, receivable_accounts):
 	for index, entry in enumerate(gl_entries, 0):
-		entry.name = start + index
+		entry.name = f"re{start + index}"
 		if entry.account in receivable_accounts:
 			entry.account_type = "Receivable"
 			entry.amount = entry.debit - entry.credit
@@ -96,6 +96,8 @@ def insert_chunk_into_payment_ledger(insert_query, gl_entries):
 		insert_query.run()
 
 
+ACCOUNT_NAME = "11030022 - Advance To Suppliers - Services - KDUG"
+
 def execute():
 	"""
 	Description:
@@ -105,88 +107,77 @@ def execute():
 	Note: Post successful migration to V14, re-running is NOT-SAFE and SHOULD NOT be attempted.
 	"""
 
-	if frappe.reload_doc("accounts", "doctype", "payment_ledger_entry"):
-		# create accounting dimension fields in Payment Ledger
-		create_accounting_dimension_fields()
+	frappe.db.delete("Payment Ledger Entry", {"account": ACCOUNT_NAME})
 
-		gl = qb.DocType("GL Entry")
-		account = qb.DocType("Account")
-		ifelse = CustomFunction("IF", ["condition", "then", "else"])
+	gl = qb.DocType("GL Entry")
+	ifelse = CustomFunction("IF", ["condition", "then", "else"])
 
-		# Get Records Count
-		relavant_accounts = (
-			qb.from_(account)
-			.select(account.name, account.account_type)
-			.where((account.account_type == "Receivable") | (account.account_type == "Payable"))
-			.orderby(account.name)
-			.run(as_dict=True)
-		)
 
-		receivable_accounts = [x.name for x in relavant_accounts if x.account_type == "Receivable"]
-		accounts = [x.name for x in relavant_accounts]
+	receivable_accounts = [ACCOUNT_NAME]
+	accounts = [ACCOUNT_NAME]
 
-		un_processed = (
-			qb.from_(gl)
-			.select(Count(gl.name))
-			.where((gl.is_cancelled == 0) & (gl.account.isin(accounts)))
-			.run()
-		)[0][0]
+	un_processed = (
+		qb.from_(gl)
+		.select(Count(gl.name))
+		.where((gl.is_cancelled == 0) & (gl.account.isin(accounts)))
+		.run()
+	)[0][0]
 
-		if un_processed:
-			print(f"Migrating {un_processed} GL Entries to Payment Ledger")
+	if un_processed:
+		print(f"Migrating {un_processed} GL Entries to Payment Ledger")
 
-			processed = 0
-			last_update_percent = 0
-			batch_size = 5000
-			last_name = None
+		processed = 0
+		last_update_percent = 0
+		batch_size = 5000
+		last_name = None
 
-			while True:
-				if last_name:
-					where_clause = gl.name.gt(last_name) & gl.account.isin(accounts) & gl.is_cancelled == 0
-				else:
-					where_clause = gl.account.isin(accounts) & gl.is_cancelled == 0
+		while True:
+			if last_name:
+				where_clause = gl.name.gt(last_name) & gl.account.isin(accounts) & gl.is_cancelled == 0
+			else:
+				where_clause = gl.account.isin(accounts) & gl.is_cancelled == 0
 
-				gl_entries = (
-					qb.from_(gl)
-					.select(
-						gl.star,
-						ConstantColumn(1).as_("docstatus"),
-						IfNull(
-							ifelse(gl.against_voucher_type == "", None, gl.against_voucher_type),
-							gl.voucher_type,
-						).as_("against_voucher_type"),
-						IfNull(ifelse(gl.against_voucher == "", None, gl.against_voucher), gl.voucher_no).as_(
-							"against_voucher_no"
-						),
-					)
-					.where(where_clause)
-					.orderby(gl.name)
-					.limit(batch_size)
-					.run(as_dict=True)
+			gl_entries = (
+				qb.from_(gl)
+				.select(
+					gl.star,
+					ConstantColumn(1).as_("docstatus"),
+					IfNull(
+						ifelse(gl.against_voucher_type == "", None, gl.against_voucher_type),
+						gl.voucher_type,
+					).as_("against_voucher_type"),
+					IfNull(ifelse(gl.against_voucher == "", None, gl.against_voucher), gl.voucher_no).as_(
+						"against_voucher_no"
+					),
 				)
+				.where(where_clause)
+				.orderby(gl.name)
+				.limit(batch_size)
+				.run(as_dict=True)
+			)
 
-				if gl_entries:
-					last_name = gl_entries[-1].name
+			if gl_entries:
+				last_name = gl_entries[-1].name
 
-					# add primary key(name) and calculate based on debit and credit
-					generate_name_and_calculate_amount(gl_entries, processed, receivable_accounts)
+				# add primary key(name) and calculate based on debit and credit
+				generate_name_and_calculate_amount(gl_entries, processed, receivable_accounts)
 
-					try:
-						insert_query = build_insert_query()
-						insert_chunk_into_payment_ledger(insert_query, gl_entries)
-						frappe.db.commit()
+				try:
+					insert_query = build_insert_query()
+					insert_chunk_into_payment_ledger(insert_query, gl_entries)
+					frappe.db.commit()
 
-						processed += len(gl_entries)
+					processed += len(gl_entries)
 
-						# Progress message
-						percent = flt((processed / un_processed) * 100, 2)
-						if percent - last_update_percent > 1:
-							print(f"{percent}% ({processed}) records processed")
-							last_update_percent = percent
+					# Progress message
+					percent = flt((processed / un_processed) * 100, 2)
+					if percent - last_update_percent > 1:
+						print(f"{percent}% ({processed}) records processed")
+						last_update_percent = percent
 
-					except Exception as err:
-						print("Migration Failed. Clear `tabPayment Ledger Entry` table before re-running")
-						raise err
-				else:
-					break
-			print(f"{processed} records have been successfully migrated")
+				except Exception as err:
+					print("Migration Failed. Clear `tabPayment Ledger Entry` table before re-running")
+					raise err
+			else:
+				break
+		print(f"{processed} records have been successfully migrated")
